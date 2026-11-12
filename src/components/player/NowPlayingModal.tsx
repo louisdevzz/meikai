@@ -23,6 +23,7 @@ export default function NowPlayingModal() {
   const {
     currentTrack,
     isPlaying,
+    isBuffering,
     currentTime,
     duration,
     progress,
@@ -221,9 +222,21 @@ export default function NowPlayingModal() {
               className="fs-ctrl-play-pill"
               onClick={togglePlay}
               style={{ background: accent }}
-              title={isPlaying ? "Pause" : "Play"}
+              title={isBuffering ? "Đang tải..." : isPlaying ? "Pause" : "Play"}
             >
-              <Icon icon={isPlaying ? PauseIcon : PlayIcon} size={26} color="#1a1210" />
+              {isBuffering ? (
+                <span
+                  className="capsule-loading-spinner"
+                  style={{
+                    width: 22,
+                    height: 22,
+                    borderColor: "rgba(26,18,16,0.22)",
+                    borderTopColor: "#1a1210",
+                  }}
+                />
+              ) : (
+                <Icon icon={isPlaying ? PauseIcon : PlayIcon} size={26} color="#1a1210" />
+              )}
             </button>
             <button className="fs-ctrl-circle" onClick={nextTrack} title="Next">
               <Icon icon={NextIcon} size={22} />

@@ -24,6 +24,7 @@ export default function PlayerBar() {
   const {
     currentTrack,
     isPlaying,
+    isBuffering,
     progress,
     volume,
     isMuted,
@@ -87,9 +88,17 @@ export default function PlayerBar() {
           <button
             className="capsule-btn capsule-btn--play"
             onClick={togglePlay}
-            title={isPlaying ? "Pause" : "Play"}
+            title={isBuffering ? "Đang tải luồng phát..." : isPlaying ? "Pause" : "Play"}
           >
-            <Icon icon={isPlaying ? PauseIcon : PlayIcon} size={20} color="white" />
+            {isBuffering ? (
+              <span
+                className="capsule-loading-spinner"
+                style={{ borderTopColor: currentTrack?.accent_color || "#ffffff" }}
+                aria-label="Loading"
+              />
+            ) : (
+              <Icon icon={isPlaying ? PauseIcon : PlayIcon} size={20} color="white" />
+            )}
           </button>
           <button className="capsule-btn" onClick={nextTrack} title="Next">
             <Icon icon={NextIcon} size={17} />
@@ -109,7 +118,7 @@ export default function PlayerBar() {
           onClick={() => setIsNowPlayingOpen(true)}
           title="Mở toàn màn hình đang phát & Lời bài hát"
         >
-          <div className="capsule-track__thumb-wrap">
+          <div className={`capsule-track__thumb-wrap ${isBuffering ? "capsule-thumb--buffering" : ""}`}>
             {currentTrack?.thumbnail_url ? (
               <img src={currentTrack.thumbnail_url} alt="" className="capsule-track__thumb" />
             ) : (
@@ -122,17 +131,24 @@ export default function PlayerBar() {
               {currentTrack?.title ?? "Chưa chọn bài hát"}
             </div>
             <div className="capsule-track__artist">
-              {currentTrack?.artist ?? "Meikai Music"}
+              {isBuffering ? "Đang tải âm thanh..." : currentTrack?.artist ?? "Meikai Music"}
             </div>
-            {/* Thin progress underline */}
+            {/* Thin progress underline (shows SimpMusic-style indeterminate sweep while buffering) */}
             <div className="capsule-track__progress-track">
-              <div
-                className="capsule-track__progress-fill"
-                style={{
-                  width: `${progress}%`,
-                  background: currentTrack?.accent_color || "#7eb8ff",
-                }}
-              />
+              {isBuffering ? (
+                <div
+                  className="capsule-track__progress-indeterminate"
+                  style={{ background: currentTrack?.accent_color || "#7eb8ff" }}
+                />
+              ) : (
+                <div
+                  className="capsule-track__progress-fill"
+                  style={{
+                    width: `${progress}%`,
+                    background: currentTrack?.accent_color || "#7eb8ff",
+                  }}
+                />
+              )}
             </div>
           </div>
         </div>

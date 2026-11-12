@@ -744,6 +744,12 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             setDuration(audioRef.current.duration);
           }
         }}
+        onWaiting={() => setIsBuffering(true)}
+        onCanPlay={() => setIsBuffering(false)}
+        onPlaying={() => {
+          setIsBuffering(false);
+          setIsPlaying(true);
+        }}
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
         onEnded={() => {
