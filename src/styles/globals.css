@@ -1,0 +1,101 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+/* ── Meikai — Design Tokens ───────────────────────────────── */
+:root {
+  /* Depths of the underworld palette */
+  --bg-void:        #050507;   /* absolute void */
+  --bg-abyss:       #0a0a0f;   /* deep abyss */
+  --bg-dark:        #0f0f17;   /* main background */
+  --bg-surface:     #16161f;   /* cards / panels */
+  --bg-elevated:    #1e1e2a;   /* hover, elevated */
+  --bg-overlay:     #252535;   /* modals, tooltips */
+
+  /* Meikai accent — cold grey-blue, like moonlight in the underworld */
+  --accent:         #7b8cde;
+  --accent-dim:     #4a5494;
+  --accent-glow:    rgba(123, 140, 222, 0.15);
+  --accent-muted:   rgba(123, 140, 222, 0.08);
+
+  /* Text */
+  --text-primary:   #e8e8f0;
+  --text-secondary: #8888aa;
+  --text-muted:     #55556a;
+  --text-ghost:     #333345;
+
+  /* Borders */
+  --border:         rgba(255, 255, 255, 0.06);
+  --border-hover:   rgba(255, 255, 255, 0.12);
+
+  /* Danger / Warning */
+  --danger:         #c94444;
+  --warning:        #c9873a;
+  --success:        #4a9460;
+
+  /* Sizing */
+  --sidebar-width:  240px;
+  --player-height:  88px;
+  --radius-sm:      6px;
+  --radius-md:      10px;
+  --radius-lg:      16px;
+  --radius-full:    9999px;
+
+  /* Typography */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* ── Reset ───────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #root {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: transparent !important;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: transparent !important;
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.5;
+  user-select: none;
+}
+
+/* ── Hide All Scrollbars (X & Y) Globally ────────────────── */
+* {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+*::-webkit-scrollbar,
+::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+}
+
+/* ── Titlebar drag region ────────────────────────────────── */
+.titlebar-drag { -webkit-app-region: drag; }
+.titlebar-no-drag { -webkit-app-region: no-drag; }
+
+/* ── Utility ─────────────────────────────────────────────── */
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flex { display: flex; }
+.flex-col { flex-direction: column; }
+.items-center { align-items: center; }
+.justify-between { justify-content: space-between; }
+.gap-2 { gap: 8px; }
+.gap-3 { gap: 12px; }
+.gap-4 { gap: 16px; }
+.w-full { width: 100%; }
+.h-full { height: 100%; }
+.relative { position: relative; }
+.absolute { position: absolute; }
+.inset-0 { inset: 0; }
+.cursor-pointer { cursor: pointer; }
+.opacity-0 { opacity: 0; }
+.opacity-100 { opacity: 1; }
