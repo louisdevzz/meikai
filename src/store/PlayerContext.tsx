@@ -196,11 +196,19 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [eqBands, setEqBands] = useState<number[]>(EQ_PRESETS["Flat"]);
   const [activePlaylistTarget, setActivePlaylistTarget] = useState<PlaylistTarget | null>(null);
 
-  const audioRef = useRef<HTMLAudioElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const segmentsRef = useRef<SponsorSegment[]>([]);
   const noticeTimerRef = useRef<any>(null);
-  const streamRequestIdRef = useRef<number>(0);
+  const currentTrackRef = useRef<Track | null>(null);
+  const queueRef = useRef<Track[]>([]);
+  const repeatModeRef = useRef<"none" | "one" | "all">("none");
+  const hasLoadedNativeRef = useRef<boolean>(false);
+  const endedHandledRef = useRef<boolean>(false);
+  const errorShownRef = useRef<boolean>(false);
+
+  currentTrackRef.current = currentTrack;
+  queueRef.current = queue;
+  repeatModeRef.current = repeatMode;
 
   const likedTrackIds = new Set(likedTracks.map((t) => t.video_id));
 
@@ -259,21 +267,72 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } catch {}
   }, [playStats]);
 
-  // Sync volume & playbackRate to HTML5 <audio>
+  // Sync volume & playbackRate to Native Rust CoreAudio Engine
   useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.volume = isMuted ? 0 : volume;
-    }
+    invoke("native_set_volume", { volume: isMuted ? 0 : volume }).catch(() => {});
   }, [volume, isMuted]);
 
   useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.playbackRate = playbackRate;
-    }
+    invoke("native_set_speed", { speed: playbackRate }).catch(() => {});
     if (videoRef.current) {
       videoRef.current.playbackRate = playbackRate;
     }
   }, [playbackRate]);
+
+  // Poll Native Rust Audio Engine state every 250ms
+  useEffect(() => {
+    const timer = setInterval(async () => {
+      if (!hasLoadedNativeRef.current) return;
+      try {
+        const snap = await invoke<{
+          track_id: string | null;
+          is_playing: boolean;
+          is_buffering: boolean;
+          current_time: number;
+          duration: number;
+          ended: boolean;
+          error: string | null;
+          video_url: string | null;
+        }>("native_get_playback_state");
+
+        const active = currentTrackRef.current;
+        if (!active || snap.track_id !== active.video_id) return;
+
+        setIsBuffering(snap.is_buffering);
+        setIsPlaying(snap.is_playing);
+        setCurrentTime(snap.current_time);
+        if (snap.duration > 0) setDuration(snap.duration);
+        if (snap.video_url) setActiveVideoUrl(snap.video_url);
+
+        if (snap.error && !errorShownRef.current) {
+          errorShownRef.current = true;
+          showNotice(`Không thể tải luồng phát bài này: ${snap.error}`);
+        }
+
+        // SponsorBlock auto-skip
+        for (const seg of segmentsRef.current) {
+          if (snap.current_time >= seg.start && snap.current_time < seg.end - 0.3) {
+            invoke("native_seek", { seconds: seg.end }).catch(() => {});
+            setCurrentTime(seg.end);
+            const skippedSec = Math.round(seg.end - seg.start);
+            showNotice(`SponsorBlock: Đã bỏ qua đoạn ${seg.category} (${skippedSec}s)`);
+            break;
+          }
+        }
+
+        if (snap.ended && !endedHandledRef.current) {
+          endedHandledRef.current = true;
+          if (repeatModeRef.current === "one") {
+            playTrack(active, queueRef.current);
+          } else {
+            nextTrack();
+          }
+        }
+      } catch {}
+    }, 250);
+
+    return () => clearInterval(timer);
+  }, []);
 
   // Fetch SponsorBlock + Real LRCLIB Synced Lyrics + ReturnYouTubeDislike on track change
   useEffect(() => {
@@ -321,7 +380,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setSleepTimerSeconds((prev) => {
         if (prev === null) return null;
         if (prev <= 1) {
-          audioRef.current?.pause();
+          invoke("native_pause").catch(() => {});
           videoRef.current?.pause();
           setIsPlaying(false);
           showNotice("Hẹn giờ tắt nhạc đã kích hoạt — Đã tạm dừng phát");
@@ -357,8 +416,6 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const playTrack = async (track: Track, newQueue?: Track[]) => {
-    const reqId = ++streamRequestIdRef.current;
-
     const enriched: Track = {
       ...track,
       accent_color: track.accent_color || "#8eb4ff",
@@ -367,11 +424,15 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         "linear-gradient(160deg, #1b223d 0%, #101424 45%, #07080d 100%)",
     };
 
+    hasLoadedNativeRef.current = true;
+    endedHandledRef.current = false;
+    errorShownRef.current = false;
+
     setCurrentTrack(enriched);
     setCurrentTime(0);
     setDuration(enriched.duration_seconds || 240);
     setIsBuffering(true);
-    setIsPlaying(true);
+    setIsPlaying(false);
     setIsFloatingBarVisible(true);
     setIsSidePanelOpen(true);
     setActiveVideoUrl(null);
@@ -393,48 +454,18 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         .catch(() => {});
     }
 
-    const attemptAudioPlay = async (preferFallback: boolean) => {
-      const media = await invoke<StreamMedia>("get_stream_media", {
+    try {
+      await invoke("native_play_track", {
         videoId: enriched.video_id,
         title: enriched.title,
         artist: enriched.artist,
-        preferFallback,
+        volume: isMuted ? 0 : volume,
+        speed: playbackRate,
       });
-      if (reqId !== streamRequestIdRef.current) return;
-
-      if (media.duration_seconds > 0) setDuration(media.duration_seconds);
-      if (media.video_url) setActiveVideoUrl(media.video_url);
-
-      if (audioRef.current) {
-        audioRef.current.src = media.audio_url;
-        audioRef.current.volume = isMuted ? 0 : volume;
-        audioRef.current.playbackRate = playbackRate;
-        audioRef.current.load();
-        await audioRef.current.play();
-        setIsPlaying(true);
-      }
-    };
-
-    try {
-      await attemptAudioPlay(false);
     } catch (err: any) {
-      if (reqId !== streamRequestIdRef.current) return;
-      // If direct YouTube stream failed on macOS WebKit, seamlessly fall back to SoundCloud stream match
-      if (!enriched.video_id.includes(":")) {
-        try {
-          await attemptAudioPlay(true);
-          return;
-        } catch (fallbackErr) {
-          console.error("Fallback stream also failed:", fallbackErr);
-        }
-      }
-      console.error("Failed to play stream:", err);
+      setIsBuffering(false);
       setIsPlaying(false);
       showNotice(`Không thể tải luồng phát bài này: ${err}`);
-    } finally {
-      if (reqId === streamRequestIdRef.current) {
-        setIsBuffering(false);
-      }
     }
   };
 
@@ -465,31 +496,29 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const togglePlay = async () => {
-    if (!audioRef.current) return;
-    if (!audioRef.current.src && currentTrack) {
+    if (!currentTrack) return;
+    if (!hasLoadedNativeRef.current) {
       await playTrack(currentTrack, queue);
       return;
     }
-    if (audioRef.current.paused) {
-      try {
-        await audioRef.current.play();
-        if (videoRef.current && isVideoMode) {
-          videoRef.current.currentTime = audioRef.current.currentTime;
-          videoRef.current.play().catch(() => {});
-        }
-        setIsPlaying(true);
-      } catch {}
-    } else {
-      audioRef.current.pause();
+    if (isPlaying) {
+      await invoke("native_pause").catch(() => {});
       videoRef.current?.pause();
       setIsPlaying(false);
+    } else {
+      await invoke("native_resume").catch(() => {});
+      if (videoRef.current && isVideoMode) {
+        videoRef.current.currentTime = currentTime;
+        videoRef.current.play().catch(() => {});
+      }
+      setIsPlaying(true);
     }
   };
 
   const seek = (seconds: number) => {
     setCurrentTime(seconds);
-    if (audioRef.current && !isNaN(seconds)) {
-      audioRef.current.currentTime = seconds;
+    if (!isNaN(seconds)) {
+      invoke("native_seek", { seconds }).catch(() => {});
     }
     if (videoRef.current && isVideoMode && !isNaN(seconds)) {
       videoRef.current.currentTime = seconds;
@@ -721,48 +750,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     >
       {children}
 
-      {/* Real Native HTML5 Audio Engine (Direct M4A Stream from RustyPipe) */}
-      <audio
-        ref={audioRef}
-        preload="auto"
-        onTimeUpdate={() => {
-          if (!audioRef.current) return;
-          const curr = audioRef.current.currentTime;
-          setCurrentTime(curr);
-
-          for (const seg of segmentsRef.current) {
-            if (curr >= seg.start && curr < seg.end - 0.3) {
-              audioRef.current.currentTime = seg.end;
-              const skippedSec = Math.round(seg.end - seg.start);
-              showNotice(`SponsorBlock: Đã bỏ qua đoạn ${seg.category} (${skippedSec}s)`);
-              break;
-            }
-          }
-        }}
-        onLoadedMetadata={() => {
-          if (audioRef.current && audioRef.current.duration && isFinite(audioRef.current.duration)) {
-            setDuration(audioRef.current.duration);
-          }
-        }}
-        onWaiting={() => setIsBuffering(true)}
-        onCanPlay={() => setIsBuffering(false)}
-        onPlaying={() => {
-          setIsBuffering(false);
-          setIsPlaying(true);
-        }}
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
-        onEnded={() => {
-          if (repeatMode === "one" && audioRef.current) {
-            audioRef.current.currentTime = 0;
-            audioRef.current.play().catch(() => {});
-          } else {
-            nextTrack();
-          }
-        }}
-      />
-
-      {/* Floating Video Player when Video Mode is toggled */}
+      {/* Floating Video Player when Video Mode is toggled (audio plays natively via Rust CoreAudio) */}
       {isVideoMode && activeVideoUrl && (
         <div
           style={{
@@ -787,8 +775,8 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             playsInline
             style={{ width: "100%", height: "100%", objectFit: "cover" }}
             onLoadedMetadata={() => {
-              if (videoRef.current && audioRef.current) {
-                videoRef.current.currentTime = audioRef.current.currentTime;
+              if (videoRef.current) {
+                videoRef.current.currentTime = currentTime;
                 if (isPlaying) videoRef.current.play().catch(() => {});
               }
             }}
