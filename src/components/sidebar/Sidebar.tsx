@@ -91,7 +91,7 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
             size={18}
             color={currentPage === "tiktok" ? "#7eb8ff" : "var(--text-secondary)"}
           />
-          <span>TikTok Audio</span>
+          <span>TikTok Music</span>
         </button>
       </div>
 

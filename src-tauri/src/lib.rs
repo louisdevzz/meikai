@@ -86,6 +86,15 @@ pub fn run() {
             commands::lastfm::update_now_playing,
             commands::tiktok::parse_tiktok_url,
             commands::player::get_player_state,
+            providers::soundcloud::get_soundcloud_home,
+            providers::soundcloud::search_soundcloud,
+            providers::soundcloud::get_soundcloud_playlist,
+            providers::soundcloud::get_soundcloud_radio_next,
+            providers::spotify::get_spotify_home,
+            providers::spotify::search_spotify,
+            providers::spotify::get_spotify_playlist,
+            providers::tiktok::get_tiktok_home,
+            providers::tiktok::search_tiktok_music,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Meikai");

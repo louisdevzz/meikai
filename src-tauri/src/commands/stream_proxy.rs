@@ -12,6 +12,8 @@ pub struct CachedStream {
     pub audio_mime: String,
     pub video_url: Option<String>,
     pub video_mime: Option<String>,
+    pub referer: Option<String>,
+    pub use_ios_ua: bool,
     pub duration_seconds: u32,
     pub created_at: Instant,
 }
@@ -19,19 +21,41 @@ pub struct CachedStream {
 static PROXY_PORT: AtomicU16 = AtomicU16::new(0);
 static PROXY_INIT_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 static STREAM_CACHE: OnceLock<RwLock<HashMap<String, CachedStream>>> = OnceLock::new();
-static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+static IOS_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+static DESKTOP_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 fn cache() -> &'static RwLock<HashMap<String, CachedStream>> {
     STREAM_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
-fn http_client() -> &'static reqwest::Client {
-    HTTP_CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .user_agent("com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)")
-            .build()
-            .expect("Failed to build proxy reqwest client")
-    })
+fn http_client_for(use_ios: bool) -> &'static reqwest::Client {
+    if use_ios {
+        IOS_HTTP_CLIENT.get_or_init(|| {
+            reqwest::Client::builder()
+                .user_agent("com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)")
+                .build()
+                .expect("Failed to build iOS proxy reqwest client")
+        })
+    } else {
+        DESKTOP_HTTP_CLIENT.get_or_init(|| {
+            reqwest::Client::builder()
+                .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+                .build()
+                .expect("Failed to build desktop proxy reqwest client")
+        })
+    }
+}
+
+pub async fn register_external_stream(key: &str, entry: CachedStream) {
+    cache().write().await.insert(key.to_string(), entry);
+}
+
+pub async fn get_cached_stream(key: &str) -> Option<CachedStream> {
+    let guard = cache().read().await;
+    guard
+        .get(key)
+        .filter(|e| e.created_at.elapsed() < Duration::from_secs(7200))
+        .cloned()
 }
 
 fn clean_mime(raw: &str, default_mime: &str) -> String {
@@ -99,6 +123,8 @@ pub async fn resolve_and_cache(video_id: &str) -> Result<CachedStream, String> {
         audio_mime,
         video_url,
         video_mime,
+        referer: None,
+        use_ios_ua: true,
         duration_seconds: player.details.duration,
         created_at: Instant::now(),
     };
@@ -253,11 +279,13 @@ async fn handle_connection(mut stream: TcpStream) -> Result<(), String> {
     if method == "HEAD" {
         let mut total_len = extract_clen_from_url(&upstream_url);
         if total_len.is_none() {
-            if let Ok(probe) = http_client()
+            let mut probe_req = http_client_for(entry.use_ios_ua)
                 .get(&upstream_url)
-                .header("Range", "bytes=0-0")
-                .send()
-                .await
+                .header("Range", "bytes=0-0");
+            if let Some(ref rf) = entry.referer {
+                probe_req = probe_req.header("Referer", rf);
+            }
+            if let Ok(probe) = probe_req.send().await
             {
                 if let Some(cr) = probe
                     .headers()
@@ -288,9 +316,13 @@ async fn handle_connection(mut stream: TcpStream) -> Result<(), String> {
 
     let mut attempt = 0u8;
     let upstream_resp = loop {
-        let req = http_client()
-            .get(&upstream_url)
-            .header("Range", &effective_range);
+        let mut req = http_client_for(entry.use_ios_ua).get(&upstream_url);
+        if entry.use_ios_ua || client_sent_range {
+            req = req.header("Range", &effective_range);
+        }
+        if let Some(ref rf) = entry.referer {
+            req = req.header("Referer", rf);
+        }
 
         let resp = match req.send().await {
             Ok(r) => r,
@@ -301,7 +333,10 @@ async fn handle_connection(mut stream: TcpStream) -> Result<(), String> {
         };
 
         let status = resp.status();
-        if (status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::GONE) && attempt == 0 {
+        if (status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::GONE)
+            && attempt == 0
+            && !video_id.contains(':')
+        {
             attempt += 1;
             if let Ok(fresh) = get_or_resolve(&video_id, true).await {
                 entry = fresh;

@@ -208,9 +208,35 @@ pub async fn get_search_suggestions(query: String) -> Result<Vec<String>, String
     Ok(suggestions)
 }
 
-/// Fetch YouTube Music Up Next Radio queue for a track
+/// Fetch Up Next Radio queue across YouTube Music, SoundCloud, Spotify, or TikTok tracks
 #[tauri::command]
-pub async fn get_radio_next(video_id: String) -> Result<Vec<YoutubeMusicTrack>, String> {
+pub async fn get_radio_next(
+    video_id: String,
+    title: Option<String>,
+    artist: Option<String>,
+) -> Result<Vec<YoutubeMusicTrack>, String> {
+    if video_id.starts_with("sc:") {
+        return crate::providers::soundcloud::get_soundcloud_radio_next(video_id).await;
+    }
+    if video_id.starts_with("sp:") || video_id.starts_with("tt:") {
+        let q = format!(
+            "{} {}",
+            title.unwrap_or_default(),
+            artist.unwrap_or_default()
+        )
+        .trim()
+        .to_string();
+        if !q.is_empty() {
+            if let Ok(sc) = crate::providers::soundcloud::search_soundcloud(q.clone()).await {
+                if !sc.is_empty() {
+                    return Ok(sc);
+                }
+            }
+            return search_youtube_music(q, Some("songs".to_string())).await;
+        }
+        return Ok(vec![]);
+    }
+
     let client = build_innertube_client()?;
     let playlist_id = format!("RDAMVM{video_id}");
 
@@ -630,23 +656,209 @@ pub struct StreamMedia {
     pub duration_seconds: u32,
 }
 
-/// Resolve playable audio + video stream URLs for a given video ID via RustyPipe + Local HTTP Range Proxy
+/// Resolve playable audio + video stream URLs across YouTube Music, SoundCloud, Spotify, and TikTok
 #[tauri::command]
-pub async fn get_stream_media(video_id: String) -> Result<StreamMedia, String> {
+pub async fn get_stream_media(
+    video_id: String,
+    title: Option<String>,
+    artist: Option<String>,
+    prefer_fallback: Option<bool>,
+) -> Result<StreamMedia, String> {
     let port = crate::commands::stream_proxy::ensure_proxy_started().await?;
-    let cached = crate::commands::stream_proxy::resolve_and_cache(&video_id).await?;
 
-    let audio_url = format!("http://127.0.0.1:{port}/stream/{video_id}?kind=audio");
-    let video_url = cached
-        .video_url
-        .as_ref()
-        .map(|_| format!("http://127.0.0.1:{port}/stream/{video_id}?kind=video"));
+    // 1. TikTok direct audio/video stream via local proxy
+    if video_id.starts_with("tt:") {
+        if crate::commands::stream_proxy::get_cached_stream(&video_id).await.is_none() {
+            if let Some(ref t) = title {
+                let _ = crate::providers::tiktok::search_tiktok_music(t.clone()).await;
+            }
+        }
+        let cached = crate::commands::stream_proxy::get_cached_stream(&video_id)
+            .await
+            .ok_or_else(|| "TikTok stream expired — please reload from TikTok tab".to_string())?;
+        return Ok(StreamMedia {
+            audio_url: format!("http://127.0.0.1:{port}/stream/{video_id}?kind=audio"),
+            video_url: cached
+                .video_url
+                .as_ref()
+                .map(|_| format!("http://127.0.0.1:{port}/stream/{video_id}?kind=video")),
+            duration_seconds: cached.duration_seconds,
+        });
+    }
 
-    Ok(StreamMedia {
-        audio_url,
-        video_url,
-        duration_seconds: cached.duration_seconds,
-    })
+    // 2. SoundCloud direct progressive MP3 or native HLS stream
+    if video_id.starts_with("sc:") {
+        let (url, mime, duration_seconds, is_hls) =
+            crate::providers::soundcloud::resolve_soundcloud_stream(&video_id).await?;
+        if is_hls {
+            return Ok(StreamMedia {
+                audio_url: url,
+                video_url: None,
+                duration_seconds,
+            });
+        }
+        crate::commands::stream_proxy::register_external_stream(
+            &video_id,
+            crate::commands::stream_proxy::CachedStream {
+                audio_url: url,
+                audio_mime: mime,
+                video_url: None,
+                video_mime: None,
+                referer: Some("https://soundcloud.com/".to_string()),
+                use_ios_ua: false,
+                duration_seconds,
+                created_at: std::time::Instant::now(),
+            },
+        )
+        .await;
+        return Ok(StreamMedia {
+            audio_url: format!("http://127.0.0.1:{port}/stream/{video_id}?kind=audio"),
+            video_url: None,
+            duration_seconds,
+        });
+    }
+
+    // 3. Spotify or explicit fallback -> match & stream via SoundCloud (with YouTube fallback)
+    if video_id.starts_with("sp:") || prefer_fallback == Some(true) {
+        let q = format!(
+            "{} {}",
+            title.as_deref().unwrap_or(""),
+            artist.as_deref().unwrap_or("")
+        )
+        .trim()
+        .to_string();
+
+        if !q.is_empty() {
+            if let Ok(sc_tracks) = crate::providers::soundcloud::search_soundcloud(q.clone()).await {
+                if let Some(best) = sc_tracks.first() {
+                    if let Ok((url, mime, dur, is_hls)) =
+                        crate::providers::soundcloud::resolve_soundcloud_stream(&best.video_id).await
+                    {
+                        if is_hls {
+                            return Ok(StreamMedia {
+                                audio_url: url,
+                                video_url: None,
+                                duration_seconds: dur,
+                            });
+                        }
+                        crate::commands::stream_proxy::register_external_stream(
+                            &best.video_id,
+                            crate::commands::stream_proxy::CachedStream {
+                                audio_url: url,
+                                audio_mime: mime,
+                                video_url: None,
+                                video_mime: None,
+                                referer: Some("https://soundcloud.com/".to_string()),
+                                use_ios_ua: false,
+                                duration_seconds: dur,
+                                created_at: std::time::Instant::now(),
+                            },
+                        )
+                        .await;
+                        return Ok(StreamMedia {
+                            audio_url: format!("http://127.0.0.1:{port}/stream/{}?kind=audio", best.video_id),
+                            video_url: None,
+                            duration_seconds: dur,
+                        });
+                    }
+                }
+            }
+
+            if prefer_fallback != Some(true) {
+                if let Ok(yt_tracks) = search_youtube_music(q, Some("songs".to_string())).await {
+                    if let Some(best) = yt_tracks.first() {
+                        if let Ok(cached) =
+                            crate::commands::stream_proxy::resolve_and_cache(&best.video_id).await
+                        {
+                            return Ok(StreamMedia {
+                                audio_url: format!(
+                                    "http://127.0.0.1:{port}/stream/{}?kind=audio",
+                                    best.video_id
+                                ),
+                                video_url: cached.video_url.as_ref().map(|_| {
+                                    format!(
+                                        "http://127.0.0.1:{port}/stream/{}?kind=video",
+                                        best.video_id
+                                    )
+                                }),
+                                duration_seconds: cached.duration_seconds,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        if prefer_fallback == Some(true) {
+            return Err("No fallback audio stream matched".to_string());
+        }
+    }
+
+    // 4. YouTube Music primary stream via RustyPipe + Local HTTP Range Proxy
+    match crate::commands::stream_proxy::resolve_and_cache(&video_id).await {
+        Ok(cached) => {
+            let audio_url = format!("http://127.0.0.1:{port}/stream/{video_id}?kind=audio");
+            let video_url = cached
+                .video_url
+                .as_ref()
+                .map(|_| format!("http://127.0.0.1:{port}/stream/{video_id}?kind=video"));
+
+            Ok(StreamMedia {
+                audio_url,
+                video_url,
+                duration_seconds: cached.duration_seconds,
+            })
+        }
+        Err(yt_err) => {
+            // Auto-fallback to SoundCloud when RustyPipe fails if metadata is available
+            let q = format!(
+                "{} {}",
+                title.as_deref().unwrap_or(""),
+                artist.as_deref().unwrap_or("")
+            )
+            .trim()
+            .to_string();
+            if !q.is_empty() {
+                if let Ok(sc_tracks) = crate::providers::soundcloud::search_soundcloud(q).await {
+                    if let Some(best) = sc_tracks.first() {
+                        if let Ok((url, mime, dur, is_hls)) =
+                            crate::providers::soundcloud::resolve_soundcloud_stream(&best.video_id)
+                                .await
+                        {
+                            let audio_url = if is_hls {
+                                url
+                            } else {
+                                crate::commands::stream_proxy::register_external_stream(
+                                    &best.video_id,
+                                    crate::commands::stream_proxy::CachedStream {
+                                        audio_url: url,
+                                        audio_mime: mime,
+                                        video_url: None,
+                                        video_mime: None,
+                                        referer: Some("https://soundcloud.com/".to_string()),
+                                        use_ios_ua: false,
+                                        duration_seconds: dur,
+                                        created_at: std::time::Instant::now(),
+                                    },
+                                )
+                                .await;
+                                format!(
+                                    "http://127.0.0.1:{port}/stream/{}?kind=audio",
+                                    best.video_id
+                                )
+                            };
+                            return Ok(StreamMedia {
+                                audio_url,
+                                video_url: None,
+                                duration_seconds: dur,
+                            });
+                        }
+                    }
+                }
+            }
+            Err(yt_err)
+        }
+    }
 }
 
 /// Fetch logged-in user's YouTube Music Playlists
@@ -729,7 +941,7 @@ pub async fn get_user_yt_playlists(app: tauri::AppHandle) -> Result<Vec<ChartPla
 /// Resolve a playable stream URL for a given video ID via RustyPipe
 #[tauri::command]
 pub async fn get_stream_url(video_id: String) -> Result<String, String> {
-    let media = get_stream_media(video_id).await?;
+    let media = get_stream_media(video_id, None, None, None).await?;
     Ok(media.audio_url)
 }
 
@@ -1055,7 +1267,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rustypipe_stream() {
-        let media = get_stream_media("fTXd-DpN3AI".to_string())
+        let media = get_stream_media("fTXd-DpN3AI".to_string(), None, None, None)
             .await
             .expect("get_stream_media should succeed");
         println!("Proxy audio_url: {}", media.audio_url);

@@ -50,6 +50,7 @@ export default function SearchPage() {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [activeSource, setActiveSource] = useState<"youtube" | "soundcloud" | "spotify" | "tiktok">("youtube");
   const [activeFilter, setActiveFilter] = useState("all");
   const [searchHistory, setSearchHistory] = useState<string[]>(() => {
     try {
@@ -116,13 +117,18 @@ export default function SearchPage() {
     return () => clearTimeout(timer);
   }, [query]);
 
-  const handleSearch = async (q: string, filterOverride?: string) => {
+  const handleSearch = async (
+    q: string,
+    filterOverride?: string,
+    sourceOverride?: "youtube" | "soundcloud" | "spotify" | "tiktok"
+  ) => {
     const trimmed = q.trim();
     if (!trimmed) {
       setResults([]);
       return;
     }
     const filterToUse = filterOverride ?? activeFilter;
+    const src = sourceOverride ?? activeSource;
     setShowSuggestions(false);
     setLoading(true);
 
@@ -136,10 +142,19 @@ export default function SearchPage() {
     });
 
     try {
-      const tracks = await invoke<Track[]>("search_youtube_music", {
-        query: trimmed,
-        filter: filterToUse === "all" ? null : filterToUse,
-      });
+      let tracks: Track[] = [];
+      if (src === "soundcloud") {
+        tracks = await invoke<Track[]>("search_soundcloud", { query: trimmed });
+      } else if (src === "spotify") {
+        tracks = await invoke<Track[]>("search_spotify", { query: trimmed });
+      } else if (src === "tiktok") {
+        tracks = await invoke<Track[]>("search_tiktok_music", { query: trimmed });
+      } else {
+        tracks = await invoke<Track[]>("search_youtube_music", {
+          query: trimmed,
+          filter: filterToUse === "all" ? null : filterToUse,
+        });
+      }
       setResults(tracks);
     } catch (e) {
       console.error("Search error:", e);
@@ -182,7 +197,15 @@ export default function SearchPage() {
           <input
             className="search-page__input"
             type="text"
-            placeholder="Tìm kiếm bài hát, nghệ sĩ, album từ YouTube Music…"
+            placeholder={
+              activeSource === "soundcloud"
+                ? "Tìm kiếm bài hát, remix, set trên SoundCloud…"
+                : activeSource === "spotify"
+                ? "Tìm kiếm bài hát hoặc dán link Spotify (track / playlist)…"
+                : activeSource === "tiktok"
+                ? "Tìm kiếm nhạc thịnh hành hoặc dán link TikTok…"
+                : "Tìm kiếm bài hát, nghệ sĩ, album từ YouTube Music…"
+            }
             value={query}
             onFocus={() => setShowSuggestions(true)}
             onChange={(e) => {
@@ -223,17 +246,38 @@ export default function SearchPage() {
           )}
         </div>
 
-        {/* Filter Chips */}
-        <div className="search-page__filter-chips">
-          {FILTER_OPTIONS.map((cat) => (
+        {/* Source Switcher + Filter Chips */}
+        <div className="search-page__filter-chips" style={{ flexWrap: "wrap" }}>
+          {(
+            [
+              { id: "youtube", label: "YouTube Music" },
+              { id: "soundcloud", label: "SoundCloud" },
+              { id: "spotify", label: "Spotify" },
+              { id: "tiktok", label: "TikTok" },
+            ] as const
+          ).map((src) => (
             <button
-              key={cat.id}
-              className={`filter-chip ${activeFilter === cat.id ? "filter-chip--active" : ""}`}
-              onClick={() => handleFilterChange(cat.id)}
+              key={src.id}
+              className={`filter-chip ${activeSource === src.id ? "filter-chip--active" : ""}`}
+              onClick={() => {
+                setActiveSource(src.id);
+                if (query.trim()) handleSearch(query, activeFilter, src.id);
+              }}
             >
-              {cat.label}
+              {src.label}
             </button>
           ))}
+
+          {activeSource === "youtube" &&
+            FILTER_OPTIONS.map((cat) => (
+              <button
+                key={cat.id}
+                className={`filter-chip ${activeFilter === cat.id ? "filter-chip--active" : ""}`}
+                onClick={() => handleFilterChange(cat.id)}
+              >
+                {cat.label}
+              </button>
+            ))}
         </div>
       </div>
 

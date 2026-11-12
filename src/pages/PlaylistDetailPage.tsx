@@ -45,7 +45,13 @@ export default function PlaylistDetailPage({ onNavigate }: PlaylistDetailPagePro
     }
 
     setLoading(true);
-    invoke<PlaylistDetails>("get_playlist_tracks", { browseId: activePlaylistTarget.id })
+    const cmd = activePlaylistTarget.id.startsWith("scpl:")
+      ? "get_soundcloud_playlist"
+      : activePlaylistTarget.id.startsWith("sppl:") || activePlaylistTarget.id.startsWith("spal:")
+      ? "get_spotify_playlist"
+      : "get_playlist_tracks";
+
+    invoke<PlaylistDetails>(cmd, { browseId: activePlaylistTarget.id })
       .then((res) => {
         setRemoteData({
           browse_id: activePlaylistTarget.id,

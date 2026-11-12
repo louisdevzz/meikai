@@ -40,6 +40,7 @@ export default function HomePage({ onNavigate }: HomePageProps) {
     setIsLoginModalOpen,
   } = usePlayer();
 
+  const [activeSource, setActiveSource] = useState<"youtube" | "spotify" | "soundcloud" | "tiktok">("youtube");
   const [activeTopFilter, setActiveTopFilter] = useState<"all" | "mood">("all");
   const [selectedMood, setSelectedMood] = useState("all");
   const [homeFeed, setHomeFeed] = useState<HomeFeedPayload | null>(null);
@@ -52,22 +53,32 @@ export default function HomePage({ onNavigate }: HomePageProps) {
   const [feedError, setFeedError] = useState<string | null>(null);
   const [showBgModal, setShowBgModal] = useState(false);
 
-  const loadHomeData = async () => {
+  const loadHomeData = async (sourceOverride?: "youtube" | "spotify" | "soundcloud" | "tiktok") => {
+    const src = sourceOverride ?? activeSource;
     setLoadingFeed(true);
     setFeedError(null);
     try {
-      const [feed, moods] = await Promise.all([
-        invoke<HomeFeedPayload>("get_home_feed"),
-        invoke<LiveMoodItem[]>("get_moods_and_genres").catch(() => [] as LiveMoodItem[]),
-      ]);
+      let feed: HomeFeedPayload;
+      if (src === "spotify") {
+        feed = await invoke<HomeFeedPayload>("get_spotify_home");
+      } else if (src === "soundcloud") {
+        feed = await invoke<HomeFeedPayload>("get_soundcloud_home");
+      } else if (src === "tiktok") {
+        feed = await invoke<HomeFeedPayload>("get_tiktok_home");
+      } else {
+        const [ytFeed, moods] = await Promise.all([
+          invoke<HomeFeedPayload>("get_home_feed"),
+          invoke<LiveMoodItem[]>("get_moods_and_genres").catch(() => [] as LiveMoodItem[]),
+        ]);
+        feed = ytFeed;
+        if (moods && moods.length > 0) setLiveMoods(moods);
+      }
+
       setHomeFeed(feed);
       const picks = (feed?.quick_picks || []).slice(0, 12);
       setQuickPicks(picks);
       setFeaturedPlaylists(feed?.featured_playlists || []);
       setMusicVideos((feed?.music_videos || []).slice(0, 12));
-      if (moods && moods.length > 0) {
-        setLiveMoods(moods);
-      }
       if (picks.length > 0) {
         seedInitialQueue(picks);
       }
@@ -80,7 +91,7 @@ export default function HomePage({ onNavigate }: HomePageProps) {
 
   useEffect(() => {
     loadHomeData();
-  }, [ytAccount?.name]);
+  }, [ytAccount?.name, activeSource]);
 
   const handleMoodSelect = async (moodId: string) => {
     setSelectedMood(moodId);
@@ -155,22 +166,47 @@ export default function HomePage({ onNavigate }: HomePageProps) {
             </button>
           )}
 
-          <button
-            className={`top-pill ${activeTopFilter === "all" ? "top-pill--active" : ""}`}
-            onClick={() => {
-              setActiveTopFilter("all");
-              handleMoodSelect("all");
-            }}
-          >
-            All
-          </button>
+          {activeSource === "youtube" && (
+            <>
+              <button
+                className={`top-pill ${activeTopFilter === "all" ? "top-pill--active" : ""}`}
+                onClick={() => {
+                  setActiveTopFilter("all");
+                  handleMoodSelect("all");
+                }}
+              >
+                All
+              </button>
 
-          <button
-            className={`top-pill ${activeTopFilter === "mood" ? "top-pill--active" : ""}`}
-            onClick={() => setActiveTopFilter(activeTopFilter === "mood" ? "all" : "mood")}
-          >
-            Mood
-          </button>
+              <button
+                className={`top-pill ${activeTopFilter === "mood" ? "top-pill--active" : ""}`}
+                onClick={() => setActiveTopFilter(activeTopFilter === "mood" ? "all" : "mood")}
+              >
+                Mood
+              </button>
+            </>
+          )}
+
+          {(
+            [
+              { id: "youtube", label: "YouTube" },
+              { id: "spotify", label: "Spotify" },
+              { id: "soundcloud", label: "SoundCloud" },
+              { id: "tiktok", label: "TikTok" },
+            ] as const
+          ).map((src) => (
+            <button
+              key={src.id}
+              className={`top-pill ${activeSource === src.id ? "top-pill--active" : ""}`}
+              onClick={() => {
+                setActiveSource(src.id);
+                setActiveTopFilter("all");
+                setSelectedMood("all");
+              }}
+            >
+              {src.label}
+            </button>
+          ))}
         </div>
 
         <div className="home-topbar__right">
@@ -315,7 +351,7 @@ export default function HomePage({ onNavigate }: HomePageProps) {
         ) : feedError && quickPicks.length === 0 ? (
           <div className="empty-state" style={{ padding: "24px 0" }}>
             <p className="empty-state__sub">Không thể kết nối YouTube Music: {feedError}</p>
-            <button className="top-pill top-pill--active" style={{ marginTop: 10 }} onClick={loadHomeData}>
+            <button className="top-pill top-pill--active" style={{ marginTop: 10 }} onClick={() => loadHomeData()}>
               Thử tải lại
             </button>
           </div>

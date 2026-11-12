@@ -382,16 +382,25 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setQueue(newQueue);
     } else if (!queue.some((t) => t.video_id === enriched.video_id)) {
       setQueue([enriched]);
-      invoke<Track[]>("get_radio_next", { videoId: enriched.video_id })
+      invoke<Track[]>("get_radio_next", {
+        videoId: enriched.video_id,
+        title: enriched.title,
+        artist: enriched.artist,
+      })
         .then((radioTracks) => {
           if (radioTracks && radioTracks.length > 0) setQueue(radioTracks);
         })
         .catch(() => {});
     }
 
-    try {
-      const media = await invoke<StreamMedia>("get_stream_media", { videoId: enriched.video_id });
-      if (reqId !== streamRequestIdRef.current) return; // User clicked another track meanwhile
+    const attemptAudioPlay = async (preferFallback: boolean) => {
+      const media = await invoke<StreamMedia>("get_stream_media", {
+        videoId: enriched.video_id,
+        title: enriched.title,
+        artist: enriched.artist,
+        preferFallback,
+      });
+      if (reqId !== streamRequestIdRef.current) return;
 
       if (media.duration_seconds > 0) setDuration(media.duration_seconds);
       if (media.video_url) setActiveVideoUrl(media.video_url);
@@ -404,8 +413,21 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         await audioRef.current.play();
         setIsPlaying(true);
       }
+    };
+
+    try {
+      await attemptAudioPlay(false);
     } catch (err: any) {
       if (reqId !== streamRequestIdRef.current) return;
+      // If direct YouTube stream failed on macOS WebKit, seamlessly fall back to SoundCloud stream match
+      if (!enriched.video_id.includes(":")) {
+        try {
+          await attemptAudioPlay(true);
+          return;
+        } catch (fallbackErr) {
+          console.error("Fallback stream also failed:", fallbackErr);
+        }
+      }
       console.error("Failed to play stream:", err);
       setIsPlaying(false);
       showNotice(`Không thể tải luồng phát bài này: ${err}`);
@@ -419,7 +441,11 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const startRadio = async (track: Track) => {
     showNotice(`Đang tạo Radio từ "${track.title}"...`);
     try {
-      const radioTracks = await invoke<Track[]>("get_radio_next", { videoId: track.video_id });
+      const radioTracks = await invoke<Track[]>("get_radio_next", {
+        videoId: track.video_id,
+        title: track.title,
+        artist: track.artist,
+      });
       if (radioTracks && radioTracks.length > 0) {
         playTrack(radioTracks[0], radioTracks);
         return;
