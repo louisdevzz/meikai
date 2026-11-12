@@ -40,47 +40,56 @@ export default function HomePage({ onNavigate }: HomePageProps) {
     setIsLoginModalOpen,
   } = usePlayer();
 
-  const [activeSource, setActiveSource] = useState<"youtube" | "spotify" | "soundcloud" | "tiktok">("youtube");
   const [activeTopFilter, setActiveTopFilter] = useState<"all" | "mood">("all");
   const [selectedMood, setSelectedMood] = useState("all");
   const [homeFeed, setHomeFeed] = useState<HomeFeedPayload | null>(null);
   const [quickPicks, setQuickPicks] = useState<Track[]>([]);
   const [featuredPlaylists, setFeaturedPlaylists] = useState<ChartPlaylistItem[]>([]);
   const [musicVideos, setMusicVideos] = useState<Track[]>([]);
+  const [spotifyFeed, setSpotifyFeed] = useState<HomeFeedPayload | null>(null);
+  const [soundcloudFeed, setSoundcloudFeed] = useState<HomeFeedPayload | null>(null);
+  const [tiktokFeed, setTiktokFeed] = useState<HomeFeedPayload | null>(null);
   const [liveMoods, setLiveMoods] = useState<LiveMoodItem[]>([]);
   const [loadingFeed, setLoadingFeed] = useState(true);
   const [loadingMood, setLoadingMood] = useState(false);
   const [feedError, setFeedError] = useState<string | null>(null);
   const [showBgModal, setShowBgModal] = useState(false);
 
-  const loadHomeData = async (sourceOverride?: "youtube" | "spotify" | "soundcloud" | "tiktok") => {
-    const src = sourceOverride ?? activeSource;
+  const loadHomeData = async () => {
     setLoadingFeed(true);
     setFeedError(null);
     try {
-      let feed: HomeFeedPayload;
-      if (src === "spotify") {
-        feed = await invoke<HomeFeedPayload>("get_spotify_home");
-      } else if (src === "soundcloud") {
-        feed = await invoke<HomeFeedPayload>("get_soundcloud_home");
-      } else if (src === "tiktok") {
-        feed = await invoke<HomeFeedPayload>("get_tiktok_home");
-      } else {
-        const [ytFeed, moods] = await Promise.all([
-          invoke<HomeFeedPayload>("get_home_feed"),
-          invoke<LiveMoodItem[]>("get_moods_and_genres").catch(() => [] as LiveMoodItem[]),
-        ]);
-        feed = ytFeed;
-        if (moods && moods.length > 0) setLiveMoods(moods);
+      const [ytRes, moodsRes, spRes, scRes, ttRes] = await Promise.allSettled([
+        invoke<HomeFeedPayload>("get_home_feed"),
+        invoke<LiveMoodItem[]>("get_moods_and_genres"),
+        invoke<HomeFeedPayload>("get_spotify_home"),
+        invoke<HomeFeedPayload>("get_soundcloud_home"),
+        invoke<HomeFeedPayload>("get_tiktok_home"),
+      ]);
+
+      if (ytRes.status === "fulfilled" && ytRes.value) {
+        const yt = ytRes.value;
+        setHomeFeed(yt);
+        const picks = (yt.quick_picks || []).slice(0, 12);
+        setQuickPicks(picks);
+        setFeaturedPlaylists(yt.featured_playlists || []);
+        setMusicVideos((yt.music_videos || []).slice(0, 12));
+        if (picks.length > 0) seedInitialQueue(picks);
+      } else if (ytRes.status === "rejected") {
+        setFeedError(String(ytRes.reason));
       }
 
-      setHomeFeed(feed);
-      const picks = (feed?.quick_picks || []).slice(0, 12);
-      setQuickPicks(picks);
-      setFeaturedPlaylists(feed?.featured_playlists || []);
-      setMusicVideos((feed?.music_videos || []).slice(0, 12));
-      if (picks.length > 0) {
-        seedInitialQueue(picks);
+      if (moodsRes.status === "fulfilled" && moodsRes.value?.length > 0) {
+        setLiveMoods(moodsRes.value);
+      }
+      if (spRes.status === "fulfilled" && spRes.value) {
+        setSpotifyFeed(spRes.value);
+      }
+      if (scRes.status === "fulfilled" && scRes.value) {
+        setSoundcloudFeed(scRes.value);
+      }
+      if (ttRes.status === "fulfilled" && ttRes.value) {
+        setTiktokFeed(ttRes.value);
       }
     } catch (err) {
       setFeedError(String(err));
@@ -91,7 +100,7 @@ export default function HomePage({ onNavigate }: HomePageProps) {
 
   useEffect(() => {
     loadHomeData();
-  }, [ytAccount?.name, activeSource]);
+  }, [ytAccount?.name]);
 
   const handleMoodSelect = async (moodId: string) => {
     setSelectedMood(moodId);
@@ -130,17 +139,118 @@ export default function HomePage({ onNavigate }: HomePageProps) {
     }
   };
 
-  const handleTrackClick = (track: Track) => {
+  const handleTrackClick = (track: Track, list: Track[]) => {
     if (currentTrack?.video_id === track.video_id) {
       togglePlay();
     } else {
-      playTrack(track, quickPicks);
+      playTrack(track, list);
     }
   };
 
+  const openPlaylist = (pl: ChartPlaylistItem) => {
+    setActivePlaylistTarget({
+      kind: "remote",
+      id: pl.browse_id,
+      title: pl.title,
+      subtitle: pl.subtitle,
+      coverUrl: pl.thumbnail_url,
+    });
+    onNavigate?.("playlist");
+  };
+
+  const renderTrackGrid = (tracks: Track[]) => (
+    <div className="quick-picks-3col">
+      {tracks.map((track) => {
+        const isCurrent = currentTrack?.video_id === track.video_id;
+        return (
+          <div
+            key={track.video_id}
+            className={`qp-row-item ${isCurrent ? "qp-row-item--active" : ""}`}
+            onClick={() => handleTrackClick(track, tracks)}
+          >
+            <div className="qp-row-item__thumb-wrap">
+              <img
+                src={track.thumbnail_url || `https://i.ytimg.com/vi/${track.video_id}/hqdefault.jpg`}
+                alt=""
+                className="qp-row-item__thumb"
+              />
+              <div className="qp-row-item__play-overlay">
+                <Icon
+                  icon={isCurrent && isPlaying ? PauseIcon : PlayIcon}
+                  size={16}
+                  color="white"
+                />
+              </div>
+            </div>
+            <div className="qp-row-item__info">
+              <div className="qp-row-item__title" title={track.title}>
+                {track.title}
+              </div>
+              <div className="qp-row-item__artist">{track.artist}</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  const renderPlaylistRow = (playlists: ChartPlaylistItem[]) => (
+    <div className="featured-charts-row">
+      {playlists.map((pl) => (
+        <div
+          key={pl.browse_id}
+          className="chart-card"
+          onClick={() => openPlaylist(pl)}
+        >
+          <div
+            className="chart-card__cover"
+            style={{ padding: 0, background: "rgba(255,255,255,0.08)" }}
+          >
+            {pl.thumbnail_url ? (
+              <img
+                src={pl.thumbnail_url}
+                alt={pl.title}
+                style={{ width: "100%", height: "100%", objectFit: "cover" }}
+              />
+            ) : (
+              <div
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: "linear-gradient(135deg, #2b5876, #4e4376)",
+                  padding: 12,
+                  textAlign: "center",
+                  fontWeight: 700,
+                }}
+              >
+                {pl.title}
+              </div>
+            )}
+            <div className="chart-card__play-hover">
+              <Icon icon={PlayIcon} size={20} color="white" />
+            </div>
+          </div>
+          <div className="chart-card__name" title={pl.title}>
+            {pl.title}
+          </div>
+          <div className="chart-card__sub">{pl.subtitle}</div>
+        </div>
+      ))}
+    </div>
+  );
+
+  const spotifyTracks = (spotifyFeed?.quick_picks || []).slice(0, 9);
+  const spotifyPlaylists = spotifyFeed?.featured_playlists || [];
+  const soundcloudTracks = (soundcloudFeed?.quick_picks || []).slice(0, 9);
+  const soundcloudPlaylists = soundcloudFeed?.featured_playlists || [];
+  const tiktokTracks = (tiktokFeed?.quick_picks || []).slice(0, 9);
+
   return (
     <div className="home-page">
-      {/* Top Bar inside Main Panel */}
+      {/* Clean SimpMusic-style Top Bar: Avatar + All / Mood + Action Icons */}
       <div className="home-topbar">
         <div className="home-topbar__left">
           <div
@@ -166,47 +276,22 @@ export default function HomePage({ onNavigate }: HomePageProps) {
             </button>
           )}
 
-          {activeSource === "youtube" && (
-            <>
-              <button
-                className={`top-pill ${activeTopFilter === "all" ? "top-pill--active" : ""}`}
-                onClick={() => {
-                  setActiveTopFilter("all");
-                  handleMoodSelect("all");
-                }}
-              >
-                All
-              </button>
+          <button
+            className={`top-pill ${activeTopFilter === "all" ? "top-pill--active" : ""}`}
+            onClick={() => {
+              setActiveTopFilter("all");
+              handleMoodSelect("all");
+            }}
+          >
+            All
+          </button>
 
-              <button
-                className={`top-pill ${activeTopFilter === "mood" ? "top-pill--active" : ""}`}
-                onClick={() => setActiveTopFilter(activeTopFilter === "mood" ? "all" : "mood")}
-              >
-                Mood
-              </button>
-            </>
-          )}
-
-          {(
-            [
-              { id: "youtube", label: "YouTube" },
-              { id: "spotify", label: "Spotify" },
-              { id: "soundcloud", label: "SoundCloud" },
-              { id: "tiktok", label: "TikTok" },
-            ] as const
-          ).map((src) => (
-            <button
-              key={src.id}
-              className={`top-pill ${activeSource === src.id ? "top-pill--active" : ""}`}
-              onClick={() => {
-                setActiveSource(src.id);
-                setActiveTopFilter("all");
-                setSelectedMood("all");
-              }}
-            >
-              {src.label}
-            </button>
-          ))}
+          <button
+            className={`top-pill ${activeTopFilter === "mood" ? "top-pill--active" : ""}`}
+            onClick={() => setActiveTopFilter(activeTopFilter === "mood" ? "all" : "mood")}
+          >
+            Mood
+          </button>
         </div>
 
         <div className="home-topbar__right">
@@ -298,7 +383,7 @@ export default function HomePage({ onNavigate }: HomePageProps) {
         </div>
       )}
 
-      {/* Section 1: Quick Picks (Live from YouTube Music) */}
+      {/* Section 1: Quick Picks (YouTube Music) */}
       <section className="home-section">
         <div className="section-eyebrow">LET&apos;S START WITH A RADIO</div>
         <div className="section-header">
@@ -328,22 +413,8 @@ export default function HomePage({ onNavigate }: HomePageProps) {
                   style={{ background: "rgba(255,255,255,0.08)" }}
                 />
                 <div className="qp-row-item__info" style={{ gap: 6 }}>
-                  <div
-                    style={{
-                      height: 12,
-                      width: "75%",
-                      borderRadius: 6,
-                      background: "rgba(255,255,255,0.1)",
-                    }}
-                  />
-                  <div
-                    style={{
-                      height: 10,
-                      width: "48%",
-                      borderRadius: 6,
-                      background: "rgba(255,255,255,0.06)",
-                    }}
-                  />
+                  <div style={{ height: 12, width: "75%", borderRadius: 6, background: "rgba(255,255,255,0.1)" }} />
+                  <div style={{ height: 10, width: "48%", borderRadius: 6, background: "rgba(255,255,255,0.06)" }} />
                 </div>
               </div>
             ))}
@@ -356,43 +427,11 @@ export default function HomePage({ onNavigate }: HomePageProps) {
             </button>
           </div>
         ) : (
-          <div className="quick-picks-3col">
-            {quickPicks.map((track) => {
-              const isCurrent = currentTrack?.video_id === track.video_id;
-              return (
-                <div
-                  key={track.video_id}
-                  className={`qp-row-item ${isCurrent ? "qp-row-item--active" : ""}`}
-                  onClick={() => handleTrackClick(track)}
-                >
-                  <div className="qp-row-item__thumb-wrap">
-                    <img
-                      src={track.thumbnail_url || `https://i.ytimg.com/vi/${track.video_id}/hqdefault.jpg`}
-                      alt=""
-                      className="qp-row-item__thumb"
-                    />
-                    <div className="qp-row-item__play-overlay">
-                      <Icon
-                        icon={isCurrent && isPlaying ? PauseIcon : PlayIcon}
-                        size={16}
-                        color="white"
-                      />
-                    </div>
-                  </div>
-                  <div className="qp-row-item__info">
-                    <div className="qp-row-item__title" title={track.title}>
-                      {track.title}
-                    </div>
-                    <div className="qp-row-item__artist">{track.artist}</div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          renderTrackGrid(quickPicks)
         )}
       </section>
 
-      {/* Section 2: Featured Playlists For You (100% Live YouTube Music) */}
+      {/* Section 2: Featured Playlists For You */}
       <section className="home-section">
         <div className="section-header">
           <h2 className="section-title">Featured playlists for you</h2>
@@ -401,121 +440,108 @@ export default function HomePage({ onNavigate }: HomePageProps) {
           </button>
         </div>
 
-        <div className="featured-charts-row">
-          {loadingFeed && featuredPlaylists.length === 0
-            ? Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="chart-card" style={{ opacity: 0.45 }}>
-                  <div
-                    className="chart-card__cover"
-                    style={{ background: "rgba(255,255,255,0.08)" }}
-                  />
-                  <div
-                    style={{
-                      height: 12,
-                      width: "80%",
-                      borderRadius: 6,
-                      background: "rgba(255,255,255,0.1)",
-                      marginTop: 8,
-                    }}
-                  />
-                </div>
-              ))
-            : featuredPlaylists.map((pl) => (
-                <div
-                  key={pl.browse_id}
-                  className="chart-card"
-                  onClick={() => {
-                    setActivePlaylistTarget({
-                      kind: "remote",
-                      id: pl.browse_id,
-                      title: pl.title,
-                      subtitle: pl.subtitle,
-                      coverUrl: pl.thumbnail_url,
-                    });
-                    onNavigate?.("playlist");
-                  }}
-                >
-                  <div
-                    className="chart-card__cover"
-                    style={{ padding: 0, background: "rgba(255,255,255,0.08)" }}
-                  >
-                    {pl.thumbnail_url ? (
-                      <img
-                        src={pl.thumbnail_url}
-                        alt={pl.title}
-                        style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                      />
-                    ) : (
-                      <div
-                        style={{
-                          width: "100%",
-                          height: "100%",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          background: "linear-gradient(135deg, #2b5876, #4e4376)",
-                          padding: 12,
-                          textAlign: "center",
-                          fontWeight: 700,
-                        }}
-                      >
-                        {pl.title}
-                      </div>
-                    )}
-                    <div className="chart-card__play-hover">
-                      <Icon icon={PlayIcon} size={20} color="white" />
-                    </div>
-                  </div>
-                  <div className="chart-card__name" title={pl.title}>
-                    {pl.title}
-                  </div>
-                  <div className="chart-card__sub">{pl.subtitle}</div>
-                </div>
-              ))}
-        </div>
+        {loadingFeed && featuredPlaylists.length === 0 ? (
+          <div className="featured-charts-row">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="chart-card" style={{ opacity: 0.45 }}>
+                <div className="chart-card__cover" style={{ background: "rgba(255,255,255,0.08)" }} />
+                <div style={{ height: 12, width: "80%", borderRadius: 6, background: "rgba(255,255,255,0.1)", marginTop: 8 }} />
+              </div>
+            ))}
+          </div>
+        ) : (
+          renderPlaylistRow(featuredPlaylists)
+        )}
       </section>
 
-      {/* Section: Logged-in User's YouTube Music Playlists */}
+      {/* Logged-in User's YouTube Music Playlists */}
       {ytAccount && userYtPlaylists.length > 0 && (
         <section className="home-section">
           <div className="section-header">
             <h2 className="section-title">Your YouTube Playlists ({ytAccount.name})</h2>
           </div>
-          <div className="featured-charts-row">
-            {userYtPlaylists.map((pl) => (
-              <div
-                key={pl.browse_id}
-                className="chart-card"
-                onClick={() => {
-                  setActivePlaylistTarget({
-                    kind: "remote",
-                    id: pl.browse_id,
-                    title: pl.title,
-                    subtitle: pl.subtitle,
-                    coverUrl: pl.thumbnail_url,
-                  });
-                  onNavigate?.("playlist");
-                }}
-              >
-                <div className="chart-card__cover" style={{ padding: 0, background: "rgba(255,255,255,0.08)" }}>
-                  <img
-                    src={pl.thumbnail_url || "https://i.ytimg.com/vi/7u4g483WTzw/hqdefault.jpg"}
-                    alt={pl.title}
-                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                  />
-                  <div className="chart-card__play-hover">
-                    <Icon icon={PlayIcon} size={20} color="white" />
-                  </div>
-                </div>
-                <div className="chart-card__name" title={pl.title}>{pl.title}</div>
-                <div className="chart-card__sub">{pl.subtitle}</div>
-              </div>
-            ))}
-          </div>
+          {renderPlaylistRow(userYtPlaylists)}
         </section>
       )}
 
-      {/* Section 3: Music Video (100% Live New Music Videos from YouTube Music) */}
+      {/* Section 3: Spotify Charts & Playlists */}
+      {(spotifyTracks.length > 0 || spotifyPlaylists.length > 0) && (
+        <>
+          {spotifyTracks.length > 0 && (
+            <section className="home-section">
+              <div className="section-eyebrow">SPOTIFY WEEKLY CHARTS</div>
+              <div className="section-header">
+                <h2 className="section-title">Spotify Top Songs</h2>
+                <button
+                  className="link-action-btn"
+                  onClick={() => playTrack(spotifyTracks[0], spotifyTracks)}
+                >
+                  Play all
+                </button>
+              </div>
+              {renderTrackGrid(spotifyTracks)}
+            </section>
+          )}
+
+          {spotifyPlaylists.length > 0 && (
+            <section className="home-section">
+              <div className="section-header">
+                <h2 className="section-title">Spotify Playlists</h2>
+              </div>
+              {renderPlaylistRow(spotifyPlaylists)}
+            </section>
+          )}
+        </>
+      )}
+
+      {/* Section 4: SoundCloud Trending & Mixes */}
+      {(soundcloudTracks.length > 0 || soundcloudPlaylists.length > 0) && (
+        <>
+          {soundcloudTracks.length > 0 && (
+            <section className="home-section">
+              <div className="section-eyebrow">SOUNDCLOUD LIVE</div>
+              <div className="section-header">
+                <h2 className="section-title">SoundCloud Trending</h2>
+                <button
+                  className="link-action-btn"
+                  onClick={() => playTrack(soundcloudTracks[0], soundcloudTracks)}
+                >
+                  Play all
+                </button>
+              </div>
+              {renderTrackGrid(soundcloudTracks)}
+            </section>
+          )}
+
+          {soundcloudPlaylists.length > 0 && (
+            <section className="home-section">
+              <div className="section-header">
+                <h2 className="section-title">SoundCloud Mixes &amp; Sets</h2>
+              </div>
+              {renderPlaylistRow(soundcloudPlaylists)}
+            </section>
+          )}
+        </>
+      )}
+
+      {/* Section 5: TikTok Trending Music */}
+      {tiktokTracks.length > 0 && (
+        <section className="home-section">
+          <div className="section-eyebrow">TIKTOK MUSIC</div>
+          <div className="section-header">
+            <h2 className="section-title">TikTok Trending Sounds</h2>
+            <button
+              className="link-action-btn"
+              onClick={() => playTrack(tiktokTracks[0], tiktokTracks)}
+            >
+              Play all
+            </button>
+          </div>
+          {renderTrackGrid(tiktokTracks)}
+        </section>
+      )}
+
+      {/* Section 6: Music Video */}
       <section className="home-section" style={{ paddingBottom: 80 }}>
         <div className="section-header">
           <h2 className="section-title">Music video</h2>
@@ -528,19 +554,8 @@ export default function HomePage({ onNavigate }: HomePageProps) {
           {loadingFeed && musicVideos.length === 0
             ? Array.from({ length: 4 }).map((_, i) => (
                 <div key={i} className="mv-card" style={{ opacity: 0.45 }}>
-                  <div
-                    className="mv-card__thumb-wrap"
-                    style={{ background: "rgba(255,255,255,0.08)" }}
-                  />
-                  <div
-                    style={{
-                      height: 12,
-                      width: "75%",
-                      borderRadius: 6,
-                      background: "rgba(255,255,255,0.1)",
-                      marginTop: 8,
-                    }}
-                  />
+                  <div className="mv-card__thumb-wrap" style={{ background: "rgba(255,255,255,0.08)" }} />
+                  <div style={{ height: 12, width: "75%", borderRadius: 6, background: "rgba(255,255,255,0.1)", marginTop: 8 }} />
                 </div>
               ))
             : musicVideos.map((mv) => (
