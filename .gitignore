@@ -1,6 +1,8 @@
 node_modules/
 dist/
 src-tauri/target/
+src-tauri/rustypipe_cache.json
+src-tauri/rustypipe_reports/
 .env
 *.local
 .DS_Store
