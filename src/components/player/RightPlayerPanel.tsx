@@ -17,6 +17,7 @@ import {
   PlayIcon,
   Video01Icon,
   Cancel01Icon,
+  Disc3Icon,
 } from "@hugeicons/core-free-icons";
 
 export default function RightPlayerPanel() {
@@ -46,6 +47,8 @@ export default function RightPlayerPanel() {
     videoStats,
     sleepTimerSeconds,
     setSleepTimer,
+    djConfig,
+    djTelemetry,
     playbackRate,
     setPlaybackRate,
     eqPreset,
@@ -117,13 +120,39 @@ export default function RightPlayerPanel() {
 
       {/* Scrollable Content */}
       <div className="right-panel-scroll">
-        {/* Artwork */}
-        <div className="right-panel-art-wrap" onClick={() => setIsNowPlayingOpen(true)}>
+        {/* Artwork (Dual-Deck Cross-Dissolve during DJ Mix) */}
+        <div
+          className={`right-panel-art-wrap ${djTelemetry.isMixing ? "dj-artwork-mixing" : ""}`}
+          onClick={() => setIsNowPlayingOpen(true)}
+        >
+          {djTelemetry.isMixing && djTelemetry.outgoingTrack?.thumbnail_url && (
+            <img
+              src={djTelemetry.outgoingTrack.thumbnail_url}
+              alt={djTelemetry.outgoingTrack.title}
+              className="right-panel-art dj-art-outgoing"
+              style={{ opacity: Math.max(0, 1 - djTelemetry.mixProgress) }}
+            />
+          )}
           <img
             src={currentTrack.thumbnail_url}
             alt={currentTrack.title}
-            className="right-panel-art"
+            className={`right-panel-art ${djTelemetry.isMixing ? "dj-turntable-vinyl" : ""}`}
+            style={
+              djTelemetry.isMixing
+                ? { opacity: Math.min(1, 0.25 + djTelemetry.mixProgress * 0.75) }
+                : undefined
+            }
           />
+          {djConfig.enabled && (djTelemetry.isMixing || djTelemetry.activeBpm) && (
+            <div className={`dj-art-overlay-pill ${djTelemetry.isMixing ? "is-live" : ""}`}>
+              <Icon icon={Disc3Icon} size={13} color="#c4b5fd" />
+              <span>
+                {djTelemetry.isMixing
+                  ? `${djTelemetry.mixPhaseLabel || "DJ MIXING"} · ${Math.round(djTelemetry.mixProgress * 100)}%`
+                  : `${Math.round(djTelemetry.activeBpm || 0)} BPM`}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Live lyric teaser */}

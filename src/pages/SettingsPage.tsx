@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { usePlayer } from "../store/PlayerContext";
+import { usePlayer, type DjTransitionStyle } from "../store/PlayerContext";
 import Icon from "../components/ui/Icon";
 import BackgroundCustomizerCard from "../components/ui/BackgroundCustomizerCard";
 import {
@@ -9,10 +9,48 @@ import {
   SparklesIcon,
   MusicNote01Icon,
   UserCircleIcon,
+  Disc3Icon,
+  AudioWaveformIcon,
+  RadioIcon,
+  SlidersHorizontalIcon,
+  FlashIcon,
+  DashboardSpeed01Icon,
 } from "@hugeicons/core-free-icons";
 
+const DJ_STYLE_OPTIONS: Array<{
+  id: DjTransitionStyle;
+  label: string;
+  desc: string;
+  badge: string;
+}> = [
+  {
+    id: "bass_swap",
+    label: "Bass Swap Pro",
+    desc: "Bộ phân tần 210Hz tự động hoán đổi dải trầm (kick/sub) mượt mà ở điểm giữa để không bao giờ bị dội bass.",
+    badge: "CLUB STANDARD",
+  },
+  {
+    id: "filter_sweep",
+    label: "Filter Sweep (HPF / LPF)",
+    desc: "Bài cũ quét High-Pass thanh thoát, bài mới mở Low-Pass dần lên như bàn pioneer DJM.",
+    badge: "PROGRESSIVE",
+  },
+  {
+    id: "echo_out",
+    label: "Echo Out Wash",
+    desc: "Thả tiếng vang 3/8 beat Stereo Delay trên bài cũ và đẩy bài mới vào nhịp dứt khoát.",
+    badge: "ECHO DROP",
+  },
+  {
+    id: "equal_power",
+    label: "Equal-Power Smooth",
+    desc: "Đường cong Cos/Sin giữ năng lượng âm lượng ổn định 100%, không bị hụt tiếng giữa 2 bài.",
+    badge: "STUDIO FADE",
+  },
+];
+
 export default function SettingsPage() {
-  const { ytAccount, setIsLoginModalOpen, logoutYouTube } = usePlayer();
+  const { ytAccount, setIsLoginModalOpen, logoutYouTube, djConfig, setDjConfig } = usePlayer();
   const [skipSponsors, setSkipSponsors] = useState(true);
   const [skipIntros, setSkipIntros] = useState(true);
   const [skipOutros, setSkipOutros] = useState(true);
@@ -85,6 +123,141 @@ export default function SettingsPage() {
         </div>
 
         <BackgroundCustomizerCard />
+      </div>
+
+      {/* Section 1.5: DJ Studio & AutoMix */}
+      <div className="settings-card settings-card--dj">
+        <div className="settings-card__header">
+          <span className="settings-card__icon">
+            <Icon icon={Disc3Icon} size={26} color="#a78bfa" />
+          </span>
+          <div style={{ flex: 1 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <h3 className="settings-card__title">DJ Studio, AutoMix & Crossfade DSP</h3>
+              <span className={`dj-status-chip ${djConfig.enabled ? "is-on" : ""}`}>
+                {djConfig.enabled ? "ACTIVE" : "OFF"}
+              </span>
+            </div>
+            <p className="settings-card__desc">
+              Dual-Deck CoreAudio DSP: phân tích BPM tự động, đồng bộ tempo, Bass Swap 210Hz, Filter Sweep & Smart Cue-In
+            </p>
+          </div>
+          <input
+            type="checkbox"
+            checked={djConfig.enabled}
+            onChange={(e) => setDjConfig({ enabled: e.target.checked })}
+            className="toggle-switch"
+            aria-label="Bật hoặc tắt DJ Studio"
+          />
+        </div>
+
+        <div
+          className="settings-card__body"
+          style={{
+            opacity: djConfig.enabled ? 1 : 0.45,
+            pointerEvents: djConfig.enabled ? "auto" : "none",
+            transition: "opacity 0.2s ease",
+          }}
+        >
+          <label className="toggle-row">
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Icon icon={RadioIcon} size={18} color="#7eb8ff" />
+              <span>Tự động nối bài cuối track (AutoMix & Preload Deck B)</span>
+            </span>
+            <input
+              type="checkbox"
+              checked={djConfig.auto_mix}
+              onChange={(e) => setDjConfig({ auto_mix: e.target.checked })}
+              className="toggle-switch"
+            />
+          </label>
+
+          <label className="toggle-row">
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Icon icon={DashboardSpeed01Icon} size={18} color="#5cdb7a" />
+              <span>BPM Tempo Sync (±14% mượt nhịp giữa Deck A và Deck B)</span>
+            </span>
+            <input
+              type="checkbox"
+              checked={djConfig.bpm_sync}
+              onChange={(e) => setDjConfig({ bpm_sync: e.target.checked })}
+              className="toggle-switch"
+            />
+          </label>
+
+          <label className="toggle-row">
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Icon icon={FlashIcon} size={18} color="#fbbf24" />
+              <span>Smart Cue-In (tự động cắt khoảng lặng đầu bài để vào beat ngay)</span>
+            </span>
+            <input
+              type="checkbox"
+              checked={djConfig.smart_cue}
+              onChange={(e) => setDjConfig({ smart_cue: e.target.checked })}
+              className="toggle-switch"
+            />
+          </label>
+
+          <div className="dj-slider-box">
+            <div className="dj-slider-box__head">
+              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <Icon icon={SlidersHorizontalIcon} size={18} color="#a78bfa" />
+                <span>Thời lượng Crossfade chuyển bài</span>
+              </span>
+              <span className="dj-slider-box__val">{djConfig.crossfade_secs} giây</span>
+            </div>
+            <input
+              type="range"
+              min={2}
+              max={16}
+              step={1}
+              value={djConfig.crossfade_secs}
+              onChange={(e) => setDjConfig({ crossfade_secs: Number(e.target.value) })}
+              className="dj-range-input"
+            />
+            <div className="dj-slider-box__ticks">
+              <span>2s Quick</span>
+              <span>8s Pro Club</span>
+              <span>16s Long Blend</span>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 8 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                fontSize: "0.85rem",
+                fontWeight: 600,
+                color: "rgba(255,255,255,0.82)",
+                marginBottom: 10,
+              }}
+            >
+              <Icon icon={AudioWaveformIcon} size={18} color="#7eb8ff" />
+              <span>Kỹ thuật chuyển bài DJ (Transition Engine)</span>
+            </div>
+            <div className="dj-style-grid">
+              {DJ_STYLE_OPTIONS.map((opt) => {
+                const active = djConfig.style === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    className={`dj-style-card ${active ? "is-active" : ""}`}
+                    onClick={() => setDjConfig({ style: opt.id })}
+                  >
+                    <div className="dj-style-card__top">
+                      <span className="dj-style-card__label">{opt.label}</span>
+                      <span className="dj-style-card__badge">{opt.badge}</span>
+                    </div>
+                    <p className="dj-style-card__desc">{opt.desc}</p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Section 2: SponsorBlock */}

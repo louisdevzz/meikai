@@ -38,6 +38,39 @@ export interface PlaylistTarget {
   coverUrl?: string;
 }
 
+export type DjTransitionStyle = "bass_swap" | "filter_sweep" | "echo_out" | "equal_power";
+
+export interface DjConfig {
+  enabled: boolean;
+  auto_mix: boolean;
+  crossfade_secs: number;
+  style: DjTransitionStyle;
+  bpm_sync: boolean;
+  smart_cue: boolean;
+}
+
+export interface DjTelemetry {
+  isMixing: boolean;
+  mixProgress: number;
+  mixStyle: string | null;
+  mixPhaseLabel: string | null;
+  deckALevel: number;
+  deckBLevel: number;
+  activeBpm: number | null;
+  incomingBpm: number | null;
+  incomingTrackId: string | null;
+  outgoingTrack: Track | null;
+}
+
+export const DEFAULT_DJ_CONFIG: DjConfig = {
+  enabled: true,
+  auto_mix: true,
+  crossfade_secs: 8,
+  style: "bass_swap",
+  bpm_sync: true,
+  smart_cue: true,
+};
+
 export const EQ_PRESETS: Record<string, number[]> = {
   Flat: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
   "Bass Boost": [6, 5, 4, 2, 1, 0, 0, 0, 1, 2],
@@ -82,6 +115,11 @@ interface PlayerContextType {
   eqPreset: string;
   eqBands: number[];
   activePlaylistTarget: PlaylistTarget | null;
+  djConfig: DjConfig;
+  djTelemetry: DjTelemetry;
+  setDjConfig: (updater: Partial<DjConfig> | ((prev: DjConfig) => DjConfig)) => void;
+  mixToTrack: (track: Track, newQueue?: Track[]) => Promise<void>;
+  getUpcomingTrack: () => Track | null;
   playTrack: (track: Track, newQueue?: Track[]) => void;
   seedInitialQueue: (tracks: Track[]) => void;
   startRadio: (track: Track) => Promise<void>;
@@ -195,6 +233,25 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [eqPreset, setEqPresetState] = useState<string>("Flat");
   const [eqBands, setEqBands] = useState<number[]>(EQ_PRESETS["Flat"]);
   const [activePlaylistTarget, setActivePlaylistTarget] = useState<PlaylistTarget | null>(null);
+  const [djConfig, setDjConfigState] = useState<DjConfig>(() => {
+    try {
+      const saved = localStorage.getItem("meikai_dj_config_v1");
+      if (saved) return { ...DEFAULT_DJ_CONFIG, ...JSON.parse(saved) };
+    } catch {}
+    return DEFAULT_DJ_CONFIG;
+  });
+  const [djTelemetry, setDjTelemetry] = useState<DjTelemetry>({
+    isMixing: false,
+    mixProgress: 0,
+    mixStyle: null,
+    mixPhaseLabel: null,
+    deckALevel: 0,
+    deckBLevel: 0,
+    activeBpm: null,
+    incomingBpm: null,
+    incomingTrackId: null,
+    outgoingTrack: null,
+  });
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const segmentsRef = useRef<SponsorSegment[]>([]);
@@ -202,13 +259,31 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const currentTrackRef = useRef<Track | null>(null);
   const queueRef = useRef<Track[]>([]);
   const repeatModeRef = useRef<"none" | "one" | "all">("none");
+  const shuffleRef = useRef<boolean>(false);
+  const isPlayingRef = useRef<boolean>(false);
+  const isVideoModeRef = useRef<boolean>(false);
+  const djConfigRef = useRef<DjConfig>(djConfig);
+  const outgoingTrackRef = useRef<Track | null>(null);
+  const preloadedForTrackRef = useRef<string>("");
+  const autoMixTriggeredForRef = useRef<string>("");
   const hasLoadedNativeRef = useRef<boolean>(false);
   const endedHandledRef = useRef<boolean>(false);
   const errorShownRef = useRef<boolean>(false);
+  const mixToTrackRef = useRef<(track: Track, newQueue?: Track[]) => Promise<void>>(async () => {});
 
   currentTrackRef.current = currentTrack;
   queueRef.current = queue;
   repeatModeRef.current = repeatMode;
+  shuffleRef.current = shuffle;
+  isPlayingRef.current = isPlaying;
+  isVideoModeRef.current = isVideoMode;
+  djConfigRef.current = djConfig;
+
+  const setDjConfig = (updater: Partial<DjConfig> | ((prev: DjConfig) => DjConfig)) => {
+    setDjConfigState((prev) =>
+      typeof updater === "function" ? updater(prev) : { ...prev, ...updater }
+    );
+  };
 
   const likedTrackIds = new Set(likedTracks.map((t) => t.video_id));
 
@@ -267,6 +342,38 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } catch {}
   }, [playStats]);
 
+  const resolveNextCandidate = (
+    active: Track | null,
+    q: Track[],
+    isShuffle: boolean,
+    repMode: "none" | "one" | "all"
+  ): Track | null => {
+    if (!q || q.length === 0) return null;
+    const currentIndex = q.findIndex((t) => t.video_id === active?.video_id);
+    if (isShuffle) {
+      if (q.length === 1) return repMode === "all" ? q[0] : null;
+      const pool = q.filter((t) => t.video_id !== active?.video_id);
+      return pool[Math.floor(Math.random() * pool.length)] || q[0];
+    }
+    let nextIndex = currentIndex + 1;
+    if (nextIndex >= q.length) {
+      if (repMode === "all") nextIndex = 0;
+      else return null;
+    }
+    return q[nextIndex] || null;
+  };
+
+  const getUpcomingTrack = (): Track | null =>
+    resolveNextCandidate(currentTrack, queue, shuffle, repeatMode);
+
+  // Persist & sync DJ configuration with Native Rust Audio Engine
+  useEffect(() => {
+    try {
+      localStorage.setItem("meikai_dj_config_v1", JSON.stringify(djConfig));
+    } catch {}
+    invoke("native_set_dj_config", { config: djConfig }).catch(() => {});
+  }, [djConfig]);
+
   // Sync volume & playbackRate to Native Rust CoreAudio Engine
   useEffect(() => {
     invoke("native_set_volume", { volume: isMuted ? 0 : volume }).catch(() => {});
@@ -279,7 +386,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   }, [playbackRate]);
 
-  // Poll Native Rust Audio Engine state every 250ms
+  // Poll Native Rust Audio Engine state every 250ms (plus DJ telemetry & AutoMix)
   useEffect(() => {
     const timer = setInterval(async () => {
       if (!hasLoadedNativeRef.current) return;
@@ -293,6 +400,15 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           ended: boolean;
           error: string | null;
           video_url: string | null;
+          is_mixing: boolean;
+          mix_progress: number;
+          mix_style: string | null;
+          mix_phase_label: string | null;
+          deck_a_level: number;
+          deck_b_level: number;
+          active_bpm: number | null;
+          incoming_bpm: number | null;
+          incoming_track_id: string | null;
         }>("native_get_playback_state");
 
         const active = currentTrackRef.current;
@@ -303,6 +419,23 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setCurrentTime(snap.current_time);
         if (snap.duration > 0) setDuration(snap.duration);
         if (snap.video_url) setActiveVideoUrl(snap.video_url);
+
+        if (!snap.is_mixing && outgoingTrackRef.current) {
+          outgoingTrackRef.current = null;
+        }
+
+        setDjTelemetry({
+          isMixing: Boolean(snap.is_mixing),
+          mixProgress: snap.mix_progress ?? 0,
+          mixStyle: snap.mix_style ?? null,
+          mixPhaseLabel: snap.mix_phase_label ?? null,
+          deckALevel: snap.deck_a_level ?? 0,
+          deckBLevel: snap.deck_b_level ?? 0,
+          activeBpm: snap.active_bpm ?? null,
+          incomingBpm: snap.incoming_bpm ?? null,
+          incomingTrackId: snap.incoming_track_id ?? null,
+          outgoingTrack: snap.is_mixing ? outgoingTrackRef.current : null,
+        });
 
         if (snap.error && !errorShownRef.current) {
           errorShownRef.current = true;
@@ -317,6 +450,53 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             const skippedSec = Math.round(seg.end - seg.start);
             showNotice(`SponsorBlock: Đã bỏ qua đoạn ${seg.category} (${skippedSec}s)`);
             break;
+          }
+        }
+
+        // DJ AutoMix: Preload Deck B & Trigger seamless beat-matched crossfade
+        const cfg = djConfigRef.current;
+        if (
+          cfg.enabled &&
+          cfg.auto_mix &&
+          !isVideoModeRef.current &&
+          repeatModeRef.current !== "one" &&
+          snap.is_playing &&
+          !snap.is_mixing &&
+          !snap.is_buffering &&
+          snap.duration > cfg.crossfade_secs + 12
+        ) {
+          const remaining = snap.duration - snap.current_time;
+          const nextCandidate = resolveNextCandidate(
+            active,
+            queueRef.current,
+            shuffleRef.current,
+            repeatModeRef.current
+          );
+          if (nextCandidate && nextCandidate.video_id !== active.video_id) {
+            const pairKey = `${active.video_id}->${nextCandidate.video_id}`;
+            if (
+              remaining <= cfg.crossfade_secs + 12 &&
+              remaining > cfg.crossfade_secs + 0.8 &&
+              preloadedForTrackRef.current !== pairKey
+            ) {
+              preloadedForTrackRef.current = pairKey;
+              invoke("native_preload_next_deck", {
+                videoId: nextCandidate.video_id,
+                title: nextCandidate.title,
+                artist: nextCandidate.artist,
+              }).catch(() => {});
+            }
+
+            if (
+              remaining <= cfg.crossfade_secs &&
+              remaining > 0.6 &&
+              autoMixTriggeredForRef.current !== active.video_id
+            ) {
+              autoMixTriggeredForRef.current = active.video_id;
+              endedHandledRef.current = true;
+              mixToTrackRef.current(nextCandidate, queueRef.current);
+              return;
+            }
           }
         }
 
@@ -415,18 +595,20 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
   };
 
-  const playTrack = async (track: Track, newQueue?: Track[]) => {
-    const enriched: Track = {
-      ...track,
-      accent_color: track.accent_color || "#8eb4ff",
-      gradient_bg:
-        track.gradient_bg ||
-        "linear-gradient(160deg, #1b223d 0%, #101424 45%, #07080d 100%)",
-    };
+  const enrichTrack = (track: Track): Track => ({
+    ...track,
+    accent_color: track.accent_color || "#8eb4ff",
+    gradient_bg:
+      track.gradient_bg ||
+      "linear-gradient(160deg, #1b223d 0%, #101424 45%, #07080d 100%)",
+  });
 
+  const prepareTrackUiState = (enriched: Track, newQueue?: Track[]) => {
     hasLoadedNativeRef.current = true;
     endedHandledRef.current = false;
     errorShownRef.current = false;
+    preloadedForTrackRef.current = "";
+    autoMixTriggeredForRef.current = "";
 
     setCurrentTrack(enriched);
     setCurrentTime(0);
@@ -441,7 +623,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     if (newQueue) {
       setQueue(newQueue);
-    } else if (!queue.some((t) => t.video_id === enriched.video_id)) {
+    } else if (!queueRef.current.some((t) => t.video_id === enriched.video_id)) {
       setQueue([enriched]);
       invoke<Track[]>("get_radio_next", {
         videoId: enriched.video_id,
@@ -453,6 +635,62 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         })
         .catch(() => {});
     }
+  };
+
+  const mixToTrack = async (track: Track, newQueue?: Track[]) => {
+    const outgoing = currentTrackRef.current;
+    const enriched = enrichTrack(track);
+
+    if (outgoing && outgoing.video_id !== enriched.video_id && djConfigRef.current.enabled && !isVideoModeRef.current) {
+      outgoingTrackRef.current = outgoing;
+      setDjTelemetry((prev) => ({
+        ...prev,
+        outgoingTrack: outgoing,
+        isMixing: true,
+        mixStyle: djConfigRef.current.style,
+        mixPhaseLabel: "Matching Deck B...",
+      }));
+    } else {
+      outgoingTrackRef.current = null;
+    }
+
+    prepareTrackUiState(enriched, newQueue);
+
+    try {
+      await invoke("native_mix_to_track", {
+        videoId: enriched.video_id,
+        title: enriched.title,
+        artist: enriched.artist,
+        volume: isMuted ? 0 : volume,
+        speed: playbackRate,
+      });
+    } catch (err: any) {
+      outgoingTrackRef.current = null;
+      setIsBuffering(false);
+      setIsPlaying(false);
+      showNotice(`Không thể mix bài tiếp theo: ${err}`);
+    }
+  };
+
+  mixToTrackRef.current = mixToTrack;
+
+  const playTrack = async (track: Track, newQueue?: Track[]) => {
+    const enriched = enrichTrack(track);
+    const shouldDjMix =
+      djConfigRef.current.enabled &&
+      hasLoadedNativeRef.current &&
+      isPlayingRef.current &&
+      !isVideoModeRef.current &&
+      currentTrackRef.current &&
+      currentTrackRef.current.video_id !== enriched.video_id;
+
+    if (shouldDjMix) {
+      await mixToTrack(enriched, newQueue);
+      return;
+    }
+
+    outgoingTrackRef.current = null;
+    prepareTrackUiState(enriched, newQueue);
 
     try {
       await invoke("native_play_track", {
@@ -541,18 +779,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const nextTrack = () => {
-    if (queue.length === 0) return;
-    const currentIndex = queue.findIndex((t) => t.video_id === currentTrack?.video_id);
-    let nextIndex = currentIndex + 1;
-
-    if (shuffle) {
-      nextIndex = Math.floor(Math.random() * queue.length);
-    } else if (nextIndex >= queue.length) {
-      if (repeatMode === "all") nextIndex = 0;
-      else return;
-    }
-
-    const next = queue[nextIndex];
+    const next = resolveNextCandidate(currentTrack, queue, shuffle, repeatMode);
     if (next) playTrack(next, queue);
   };
 
@@ -713,6 +940,11 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         eqPreset,
         eqBands,
         activePlaylistTarget,
+        djConfig,
+        djTelemetry,
+        setDjConfig,
+        mixToTrack,
+        getUpcomingTrack,
         playTrack,
         seedInitialQueue,
         startRadio,

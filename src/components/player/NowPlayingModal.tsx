@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { usePlayer } from "../../store/PlayerContext";
+import { Disc3Icon } from "@hugeicons/core-free-icons";
 import Icon from "../ui/Icon";
 import {
   PlayIcon,
@@ -51,6 +52,8 @@ export default function NowPlayingModal() {
     lyricsLoading,
     lyricOffset,
     sponsorNotice,
+    djConfig,
+    djTelemetry,
   } = usePlayer();
 
   const [showQueue, setShowQueue] = useState(false);
@@ -148,12 +151,35 @@ export default function NowPlayingModal() {
       <div className="fullscreen-player__grid">
         {/* Left: Artwork & Expressive Controls */}
         <div className="fullscreen-player__left">
-          <div className="fs-artwork-wrap">
+          <div className={`fs-artwork-wrap ${djTelemetry.isMixing ? "dj-artwork-mixing" : ""}`}>
+            {djTelemetry.isMixing && djTelemetry.outgoingTrack?.thumbnail_url && (
+              <img
+                src={djTelemetry.outgoingTrack.thumbnail_url}
+                alt={djTelemetry.outgoingTrack.title}
+                className="fs-artwork dj-art-outgoing"
+                style={{ opacity: Math.max(0, 1 - djTelemetry.mixProgress) }}
+              />
+            )}
             <img
               src={currentTrack.thumbnail_url}
               alt={currentTrack.title}
-              className="fs-artwork"
+              className={`fs-artwork ${djTelemetry.isMixing ? "dj-turntable-vinyl" : ""}`}
+              style={
+                djTelemetry.isMixing
+                  ? { opacity: Math.min(1, 0.25 + djTelemetry.mixProgress * 0.75) }
+                  : undefined
+              }
             />
+            {djConfig.enabled && (djTelemetry.isMixing || djTelemetry.activeBpm) && (
+              <div className={`dj-art-overlay-pill is-fs ${djTelemetry.isMixing ? "is-live" : ""}`}>
+                <Icon icon={Disc3Icon} size={14} color="#c4b5fd" />
+                <span>
+                  {djTelemetry.isMixing
+                    ? `${djTelemetry.mixPhaseLabel || "DJ MIXING"} · ${Math.round(djTelemetry.mixProgress * 100)}%`
+                    : `DJ ENGINE · ${Math.round(djTelemetry.activeBpm || 0)} BPM`}
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="fs-meta-row">
